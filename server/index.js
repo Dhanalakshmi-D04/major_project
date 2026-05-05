@@ -6,11 +6,25 @@ import sqlite3 from "sqlite3";
 import fs from "fs";
 import path from "path";
 import csv from "csv-parser";
+import multer from "multer";
 import { analyzePacket } from "./ml.js";
 
 const app = express();
 const PORT = 8080;
 const SECRET_KEY = "cyber_stealth_secret_2024";
+
+// Configure Multer for large uploads
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const dir = "./archive";
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir);
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+    cb(null, `upload_${Date.now()}_${file.originalname}`);
+  }
+});
+const upload = multer({ storage });
 
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
@@ -110,6 +124,52 @@ app.post("/api/ingest", authenticateToken, (req, res) => {
 
   stmt.finalize();
   res.json({ message: "Signal uplink successful", count: data.length });
+});
+
+app.post("/api/upload", authenticateToken, upload.single("file"), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+
+  const filePath = req.file.path;
+  let count = 0;
+
+  // Begin a single transaction for high-speed indexing
+  db.serialize(() => {
+    db.run("BEGIN TRANSACTION");
+    const stmt = db.prepare(`INSERT INTO incidents (timestamp, sourceIp, destinationIp, userId, resource, category, riskLevel, action, threatScore, raw_data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+
+    fs.createReadStream(filePath)
+      .pipe(csv())
+      .on("data", (packet) => {
+        const analysis = analyzePacket(packet);
+        stmt.run(
+          packet.timestamp || new Date().toISOString(),
+          packet.sourceIp || "0.0.0.0",
+          packet.destinationIp || "0.0.0.0",
+          packet.userId || "system",
+          packet.resource || "N/A",
+          analysis.category,
+          analysis.riskLevel,
+          analysis.action,
+          analysis.threatScore,
+          JSON.stringify(packet)
+        );
+        count++;
+      })
+      .on("end", () => {
+        stmt.finalize();
+        db.run("COMMIT", (err) => {
+          if (err) {
+            console.error("COMMIT Error:", err);
+            return res.status(500).json({ error: "Database synchronization failure" });
+          }
+          res.json({ message: "Uplink success", count, filename: req.file.filename });
+        });
+      })
+      .on("error", (err) => {
+        db.run("ROLLBACK");
+        res.status(500).json({ error: "Stream failure during ingestion" });
+      });
+  });
 });
 
 app.get("/api/archive", authenticateToken, (req, res) => {

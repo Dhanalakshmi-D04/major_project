@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { 
   FiUploadCloud, FiDatabase, FiFileText, FiCheckCircle, FiZap, FiPlusCircle, FiHardDrive 
 } from "react-icons/fi";
-import { ingestData, getLocalArchive, ingestFromArchive } from "../services/api.js";
+import { ingestData, uploadFile, getLocalArchive, ingestFromArchive } from "../services/api.js";
 
 export default function IngestPage() {
   const [archive, setArchive] = useState([]);
@@ -76,41 +76,34 @@ export default function IngestPage() {
     }).filter(p => p.sourceIp !== "0.0.0.0");
   };
 
-  const handleFileUpload = (e) => {
+  const handleFileUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
 
     setLoading(true);
-    setStatus(`Processing ${file.name}...`);
+    setStatus(`Uplinking ${file.name} to SOC Core...`);
 
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-      try {
-        const text = event.target.result;
-        let jsonData = parseCSV(text);
-        
-        // Fallback to Neural Extraction if CSV parsing yields nothing useful
-        if (jsonData.length === 0) {
-          setStatus("Parsing as unstructured log...");
-          jsonData = neuralExtract(text);
-        }
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
 
-        if (jsonData.length === 0) {
-          throw new Error("No valid forensic signals detected in file.");
-        }
-
-        const res = await ingestData(jsonData.slice(0, 5000));
-        setStatus(`Uplink success: ${res.count} signals synchronized.`);
-        fetchArchive();
-        setTimeout(() => setStatus(null), 5000);
-      } catch (err) {
-        const errorMsg = err.response?.data?.error || err.message || "Uplink failed";
+      // Direct upload to server for streamed ingestion (handles any file size)
+      const res = await uploadFile(formData);
+      
+      setStatus(`Uplink successful: ${res.count} signals synchronized.`);
+      fetchArchive();
+      setTimeout(() => setStatus(null), 5000);
+    } catch (err) {
+      if (err.response?.status === 403) {
+        setStatus("Error: Session expired or invalid. Please log out and sign in again.");
+      } else {
+        const errorMsg = err.response?.data?.error || err.message || "Uplink failure";
         setStatus(`Error: ${errorMsg}`);
-      } finally {
-        setLoading(false);
       }
-    };
-    reader.readAsText(file);
+    } finally {
+      setLoading(false);
+      e.target.value = null; // Reset input
+    }
   };
 
   const handleArchiveIngest = async (filename) => {
