@@ -27,55 +27,56 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen w-full flex items-center justify-center bg-[#020617] relative">
-      <div className="absolute inset-0 opacity-20" style={{
-        backgroundImage: 'radial-gradient(circle at 2px 2px, rgba(255, 255, 255, 0.05) 1px, transparent 0)',
-        backgroundSize: '32px 32px'
+    <div className="min-h-screen w-full flex items-center justify-center bg-background relative overflow-hidden">
+      {/* Tactical Grid Background */}
+      <div className="absolute inset-0 opacity-10" style={{
+        backgroundImage: 'linear-gradient(#1E2530 1px, transparent 1px), linear-gradient(90deg, #1E2530 1px, transparent 1px)',
+        backgroundSize: '40px 40px'
       }} />
 
-      <div className="w-full max-w-md px-6 z-10">
-        <div className="soc-card p-10 rounded-[2.5rem] shadow-2xl">
-          <div className="flex flex-col items-center mb-10">
-            <div className="h-16 w-16 bg-primary rounded-[1.25rem] flex items-center justify-center text-white shadow-xl shadow-primary/20 mb-6">
-              <FiShield size={32} />
+      <div className="w-full max-w-[400px] px-6 z-10">
+        <div className="soc-card p-8 shadow-tactical bg-elevated">
+          <div className="flex flex-col items-start mb-8">
+            <div className="text-primary mb-4">
+              <FiShield size={28} />
             </div>
-            <h1 className="text-3xl font-bold text-white tracking-tight">Access Control</h1>
-            <p className="text-slate-500 text-sm mt-2 font-medium">Authenticate to enter ForensiAI SOC</p>
+            <h1 className="text-xl">Access Control</h1>
+            <p className="text-text-secondary text-[0.7rem] mt-1 font-mono uppercase tracking-widest">Authenticate to enter ForensiAI SOC</p>
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-6">
             {error && (
-              <div className="bg-danger/10 border border-danger/20 p-4 rounded-xl flex items-center gap-3 text-danger text-sm font-medium animate-shake">
-                <FiAlertCircle className="shrink-0" size={18} />
+              <div className="bg-danger/10 border border-danger/20 p-3 rounded-sm flex items-center gap-3 text-danger text-[0.7rem] font-mono uppercase tracking-wider">
+                <FiAlertCircle className="shrink-0" size={14} />
                 <span>{error}</span>
               </div>
             )}
 
             <div className="space-y-2">
-              <label className="text-xs font-bold text-primary/60 uppercase tracking-widest ml-1">Account Identifier</label>
+              <label className="label-mono">Account Identifier</label>
               <div className="relative group">
-                <FiUser className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-primary transition-colors" />
+                <FiUser className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted group-focus-within:text-primary transition-colors" size={14} />
                 <input
                   type="text"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   placeholder="analyst_root"
-                  className="w-full input-soc pl-12"
+                  className="w-full input-soc pl-10 py-2"
                   required
                 />
               </div>
             </div>
 
             <div className="space-y-2">
-              <label className="text-xs font-bold text-primary/60 uppercase tracking-widest ml-1">Security Key</label>
+              <label className="label-mono">Security Key</label>
               <div className="relative group">
-                <FiLock className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-primary transition-colors" />
+                <FiLock className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted group-focus-within:text-primary transition-colors" size={14} />
                 <input
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••"
-                  className="w-full input-soc pl-12"
+                  className="w-full input-soc pl-10 py-2"
                   required
                 />
               </div>
@@ -84,14 +85,14 @@ export default function LoginPage() {
             <button
               type="submit"
               disabled={loading}
-              className="btn-primary w-full h-14 text-sm tracking-widest uppercase font-bold"
+              className="btn-primary w-full py-3 text-[0.75rem]"
             >
               {loading ? "Authenticating..." : "Authorize Session"}
             </button>
           </form>
 
-          <div className="mt-8 text-center pt-8 border-t border-white/5">
-            <p className="text-slate-500 text-sm font-medium">
+          <div className="mt-8 text-center pt-6 border-t border-divider">
+            <p className="text-text-secondary text-xs">
               New Analyst?{" "}
               <Link to="/register" className="text-primary font-bold hover:underline transition-all">
                 Request Identity
@@ -101,9 +102,9 @@ export default function LoginPage() {
         </div>
 
         <div className="mt-8 text-center">
-           <p className="text-[0.65rem] font-bold text-slate-600 uppercase tracking-widest leading-loose">
+           <p className="text-[0.6rem] font-mono font-bold text-text-muted uppercase tracking-widest leading-loose">
              Proprietary Investigation Software <br />
-             Authorized Personnel Only // Compliance ID: SOC-2
+             Authorized Personnel Only // Sector 7G
            </p>
         </div>
       </div>

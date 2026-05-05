@@ -76,21 +76,28 @@ export default function IngestPage() {
     }).filter(p => p.sourceIp !== "0.0.0.0");
   };
 
+  const [progress, setProgress] = useState(0);
+
   const handleFileUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
 
     setLoading(true);
+    setProgress(0);
     setStatus(`Uplinking ${file.name} to SOC Core...`);
 
     try {
       const formData = new FormData();
       formData.append("file", file);
 
-      // Direct upload to server for streamed ingestion (handles any file size)
-      const res = await uploadFile(formData);
+      // Direct upload with progress monitoring
+      const res = await uploadFile(formData, (percent) => {
+        setProgress(percent);
+        setStatus(`Uplinking ${file.name} to SOC Core: ${percent}%`);
+      });
       
       setStatus(`Uplink successful: ${res.count} signals synchronized.`);
+      setProgress(100);
       fetchArchive();
       setTimeout(() => setStatus(null), 5000);
     } catch (err) {
@@ -131,8 +138,18 @@ export default function IngestPage() {
         </div>
         <div>
            {status && (
-             <div className="font-mono text-[0.65rem] text-primary uppercase tracking-wider">
-               {status}
+             <div className="space-y-2 text-right">
+               <div className="font-mono text-[0.65rem] text-primary uppercase tracking-wider">
+                 {status}
+               </div>
+               {loading && (
+                 <div className="w-48 h-1 bg-divider rounded-full overflow-hidden ml-auto">
+                   <div 
+                     className="h-full bg-primary transition-all duration-300" 
+                     style={{ width: `${progress}%` }}
+                   />
+                 </div>
+               )}
              </div>
            )}
         </div>

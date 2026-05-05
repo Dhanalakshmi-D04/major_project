@@ -7,6 +7,7 @@ import TimelinePage from "./pages/TimelinePage.jsx";
 import ChatbotPage from "./pages/ChatbotPage.jsx";
 import ReportsPage from "./pages/ReportsPage.jsx";
 import IngestPage from "./pages/IngestPage.jsx";
+import AIInvestigationPage from "./pages/AIInvestigationPage.jsx";
 import ProfilePage from "./pages/ProfilePage.jsx";
 import LoginPage from "./pages/LoginPage.jsx";
 import RegisterPage from "./pages/RegisterPage.jsx";
@@ -33,6 +34,7 @@ export default function App() {
           <Route index element={<DashboardPage />} />
           <Route path="/incidents" element={<IncidentsPage />} />
           <Route path="/timeline" element={<TimelinePage />} />
+          <Route path="/investigation" element={<AIInvestigationPage />} />
           <Route path="/chatbot" element={<ChatbotPage />} />
           <Route path="/reports" element={<ReportsPage />} />
           <Route path="/ingest" element={<IngestPage />} />
