@@ -24,10 +24,18 @@ const storage = multer.diskStorage({
     cb(null, `upload_${Date.now()}_${file.originalname}`);
   }
 });
-const upload = multer({ storage });
+const upload = multer({ 
+  storage,
+  limits: { fileSize: 500 * 1024 * 1024 } // Support up to 500MB forensic files
+});
 
-app.use(cors());
-app.use(express.json({ limit: '50mb' }));
+app.use(cors({
+  origin: "*",
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"]
+}));
+app.use(express.json({ limit: '100mb' }));
+app.use(express.urlencoded({ extended: true, limit: '100mb' }));
 
 import { fileURLToPath } from "url";
 
@@ -144,62 +152,73 @@ app.post("/api/ingest", authenticateToken, (req, res) => {
   res.json({ message: "Signal uplink successful", count: data.length });
 });
 
-app.post("/api/upload", authenticateToken, upload.single("file"), (req, res) => {
-  if (!req.file) return res.status(400).json({ error: "No file uploaded" });
-
-  const filePath = req.file.path;
-  
-  // Respond immediately to prevent client-side "Network Error" or timeouts
-  res.json({ 
-    message: "Forensic uplink initiated. Processing in SOC background.", 
-    filename: req.file.filename,
-    status: "processing"
-  });
-
-  // Background Ingestion Task with Batch Commits to prevent UI locking
-  setImmediate(async () => {
-    let count = 0;
-    const BATCH_SIZE = 5000;
-    try {
-      const stmt = db.prepare(`INSERT INTO incidents (timestamp, sourceIp, destinationIp, userId, resource, category, riskLevel, action, threatScore, raw_data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-      const stream = fs.createReadStream(filePath).pipe(csv());
-
-      await new Promise((resolve, reject) => db.run("BEGIN TRANSACTION", (err) => err ? reject(err) : resolve()));
-
-      for await (const packet of stream) {
-        const analysis = analyzePacket(packet);
-        await new Promise((resolve, reject) => {
-          stmt.run(
-            packet.timestamp || new Date().toISOString(),
-            packet.sourceIp || "0.0.0.0",
-            packet.destinationIp || "0.0.0.0",
-            packet.userId || "system",
-            packet.resource || "N/A",
-            analysis.category,
-            analysis.riskLevel,
-            analysis.action,
-            analysis.threatScore,
-            JSON.stringify(packet),
-            (err) => err ? reject(err) : resolve()
-          );
-        });
-        count++;
-
-        // Commit and restart transaction every BATCH_SIZE to release the lock for UI queries
-        if (count % BATCH_SIZE === 0) {
-          await new Promise((resolve, reject) => db.run("COMMIT", (err) => err ? reject(err) : resolve()));
-          await new Promise((resolve, reject) => db.run("BEGIN TRANSACTION", (err) => err ? reject(err) : resolve()));
-          console.log(`📡 SOC Ingest Progress: ${count} signals indexed...`);
-        }
-      }
-
-      stmt.finalize();
-      await new Promise((resolve, reject) => db.run("COMMIT", (err) => err ? reject(err) : resolve()));
-      console.log(`✅ Background Ingest Complete: ${count} signals total.`);
-    } catch (err) {
-      console.error("❌ Background Ingest Error:", err);
-      db.run("ROLLBACK");
+app.post("/api/upload", authenticateToken, (req, res) => {
+  upload.single("file")(req, res, (err) => {
+    if (err instanceof multer.MulterError) {
+      console.error("❌ Multer Error:", err);
+      return res.status(400).json({ error: `Upload Protocol Error: ${err.message}` });
+    } else if (err) {
+      console.error("❌ Unknown Upload Error:", err);
+      return res.status(500).json({ error: "Forensic Uplink Interrupted" });
     }
+
+    if (!req.file) return res.status(400).json({ error: "No telemetry packet provided" });
+
+    const filePath = req.file.path;
+    console.log(`📡 Forensic Uplink Received: ${req.file.originalname}`);
+
+    res.json({ 
+      message: "Forensic uplink initiated. Processing in SOC background.", 
+      filename: req.file.filename,
+      status: "processing"
+    });
+
+    // Background Ingestion Task with Batch Commits to prevent UI locking
+    setImmediate(async () => {
+      let count = 0;
+      const BATCH_SIZE = 5000;
+      try {
+        const stmt = db.prepare(`INSERT INTO incidents (timestamp, sourceIp, destinationIp, userId, resource, category, riskLevel, action, threatScore, raw_data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+        const stream = fs.createReadStream(filePath).pipe(csv());
+
+        await new Promise((resolve, reject) => db.run("BEGIN TRANSACTION", (err) => err ? reject(err) : resolve()));
+
+        for await (const packet of stream) {
+          const analysis = analyzePacket(packet);
+          await new Promise((resolve, reject) => {
+            stmt.run(
+              packet.timestamp || new Date().toISOString(),
+              packet.sourceIp || "0.0.0.0",
+              packet.destinationIp || "0.0.0.0",
+              packet.userId || "system",
+              packet.resource || "N/A",
+              analysis.category,
+              analysis.riskLevel,
+              analysis.action,
+              analysis.threatScore,
+              JSON.stringify(packet),
+              (err) => err ? reject(err) : resolve()
+            );
+          });
+          count++;
+
+          if (count % BATCH_SIZE === 0) {
+            await new Promise((resolve, reject) => db.run("COMMIT", (err) => err ? reject(err) : resolve()));
+            await new Promise((resolve, reject) => db.run("BEGIN TRANSACTION", (err) => err ? reject(err) : resolve()));
+            console.log(`📡 SOC Ingest Progress: ${count} signals indexed...`);
+            // Yield event loop to allow Dashboard/Reports to process
+            await new Promise(resolve => setTimeout(resolve, 100));
+          }
+        }
+
+        stmt.finalize();
+        await new Promise((resolve, reject) => db.run("COMMIT", (err) => err ? reject(err) : resolve()));
+        console.log(`✅ Background Ingest Complete: ${count} signals total.`);
+      } catch (err) {
+        console.error("❌ Background Ingest Error:", err);
+        db.run("ROLLBACK");
+      }
+    });
   });
 });
 
@@ -270,13 +289,15 @@ app.post("/api/archive/ingest", authenticateToken, (req, res) => {
         if (count % BATCH_SIZE === 0) {
           await new Promise((resolve, reject) => db.run("COMMIT", (err) => err ? reject(err) : resolve()));
           await new Promise((resolve, reject) => db.run("BEGIN TRANSACTION", (err) => err ? reject(err) : resolve()));
-          console.log(`📡 Archive Sync Progress: ${count} signals indexed...`);
+          console.log(`📡 SOC Ingest Progress: ${count} signals indexed...`);
+          // Breathing room for the event loop and other queries
+          await new Promise(resolve => setTimeout(resolve, 100));
         }
       }
 
       stmt.finalize();
       await new Promise((resolve, reject) => db.run("COMMIT", (err) => err ? reject(err) : resolve()));
-      res.json({ message: `Archive ${filename} ingested successfully`, count });
+      console.log(`✅ Background Ingest Complete: ${count} signals total.`);
     } catch (err) {
       console.error("❌ Archive Ingest Error:", err);
       db.run("ROLLBACK");
@@ -408,13 +429,15 @@ app.post("/api/chat", authenticateToken, (req, res) => {
 });
 
 app.get("/api/report", authenticateToken, async (req, res) => {
+  console.log("📄 Generating Forensic Integrity Report...");
   try {
-    // Optimized SQL aggregations for reporting
-    const total = await new Promise((resolve) => db.get("SELECT COUNT(*) as count FROM incidents", (err, row) => resolve(row?.count || 0)));
-    const high = await new Promise((resolve) => db.get("SELECT COUNT(*) as count FROM incidents WHERE riskLevel = 'High'", (err, row) => resolve(row?.count || 0)));
-    const medium = await new Promise((resolve) => db.get("SELECT COUNT(*) as count FROM incidents WHERE riskLevel = 'Medium'", (err, row) => resolve(row?.count || 0)));
-    const low = await new Promise((resolve) => db.get("SELECT COUNT(*) as count FROM incidents WHERE riskLevel = 'Low'", (err, row) => resolve(row?.count || 0)));
+    const total = await new Promise((resolve) => db.get("SELECT COUNT(*) as count FROM incidents", (err, row) => resolve(Number(row?.count || 0))));
+    const high = await new Promise((resolve) => db.get("SELECT COUNT(*) as count FROM incidents WHERE riskLevel = 'High'", (err, row) => resolve(Number(row?.count || 0))));
+    const medium = await new Promise((resolve) => db.get("SELECT COUNT(*) as count FROM incidents WHERE riskLevel = 'Medium'", (err, row) => resolve(Number(row?.count || 0))));
+    const low = await new Promise((resolve) => db.get("SELECT COUNT(*) as count FROM incidents WHERE riskLevel = 'Low'", (err, row) => resolve(Number(row?.count || 0))));
     
+    console.log(`📊 Report Stats: Total=${total}, High=${high}`);
+
     const categoryBreakdown = await new Promise((resolve) => {
       db.all("SELECT category as name, COUNT(*) as count FROM incidents GROUP BY category ORDER BY count DESC", (err, rows) => resolve(rows || []));
     });
@@ -423,9 +446,8 @@ app.get("/api/report", authenticateToken, async (req, res) => {
       db.all("SELECT sourceIp as ip, COUNT(*) as count FROM incidents WHERE sourceIp IS NOT NULL GROUP BY sourceIp ORDER BY count DESC LIMIT 10", (err, rows) => resolve(rows || []));
     });
 
-    const avgScore = await new Promise((resolve) => {
-      db.get("SELECT AVG(threatScore) as avg FROM incidents", (err, row) => resolve(row?.avg?.toFixed(1) || 0));
-    });
+    const avgScoreResult = await new Promise((resolve) => db.get("SELECT AVG(threatScore) as avg FROM incidents", (err, row) => resolve(row?.avg)));
+    const avgScore = avgScoreResult ? Number(avgScoreResult).toFixed(1) : "0.0";
 
     const recentHighRisk = await new Promise((resolve) => {
       db.all("SELECT sourceIp, destinationIp, category, action, threatScore, timestamp FROM incidents WHERE riskLevel = 'High' ORDER BY id DESC LIMIT 5", (err, rows) => resolve(rows || []));
@@ -433,6 +455,7 @@ app.get("/api/report", authenticateToken, async (req, res) => {
 
     const riskScore = high > (total * 0.3) ? "Critical" : high > (total * 0.1) ? "High" : total > 0 ? "Stable" : "No Data";
 
+    console.log("✅ Report Synthesis Complete.");
     res.json({
       summary: "ForensiAI Network Integrity Report",
       generationTime: new Date().toISOString(),

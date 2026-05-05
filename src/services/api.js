@@ -21,7 +21,7 @@ export const getDashboard = () => api.get("/dashboard").then(r => r.data);
 export const getIncidents = () => api.get("/incidents").then(r => r.data);
 export const getNotifications = () => api.get("/notifications").then(r => r.data);
 export const getTimeline = () => api.get("/timeline").then(r => r.data);
-export const getReport = () => api.get("/report").then(r => r.data);
+export const getReport = () => api.get("/report", { timeout: 0 }).then(r => r.data);
 export const chatWithAI = (message) => api.post("/chat", { message }).then(r => r.data);
 
 // Ingestion Services
