@@ -24,7 +24,7 @@ const storage = multer.diskStorage({
     cb(null, `upload_${Date.now()}_${file.originalname}`);
   }
 });
-const upload = multer({ 
+const upload = multer({
   storage,
   limits: { fileSize: 500 * 1024 * 1024 } // Support up to 500MB forensic files
 });
@@ -131,7 +131,7 @@ app.post("/api/ingest", authenticateToken, (req, res) => {
   if (!Array.isArray(data)) return res.status(400).json({ error: "Invalid signal format" });
 
   const stmt = db.prepare(`INSERT INTO incidents (timestamp, sourceIp, destinationIp, userId, resource, category, riskLevel, action, threatScore, raw_data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-  
+
   data.forEach((packet) => {
     const analysis = analyzePacket(packet);
     stmt.run(
@@ -167,56 +167,74 @@ app.post("/api/upload", authenticateToken, (req, res) => {
     const filePath = req.file.path;
     console.log(`📡 Forensic Uplink Received: ${req.file.originalname}`);
 
-    res.json({ 
-      message: "Forensic uplink initiated. Processing in SOC background.", 
+    res.json({
+      message: "Forensic uplink initiated. Processing in SOC background.",
       filename: req.file.filename,
       status: "processing"
     });
 
-    // Background Ingestion Task with Batch Commits to prevent UI locking
+    // Quantum-Stream Bulk Ingestion Task (Extreme Hybrid)
     setImmediate(async () => {
       let count = 0;
-      const BATCH_SIZE = 5000;
-      try {
-        const stmt = db.prepare(`INSERT INTO incidents (timestamp, sourceIp, destinationIp, userId, resource, category, riskLevel, action, threatScore, raw_data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-        const stream = fs.createReadStream(filePath).pipe(csv());
+      const SUPER_BULK_SIZE = 1000; 
+      let buffer = [];
 
-        await new Promise((resolve, reject) => db.run("BEGIN TRANSACTION", (err) => err ? reject(err) : resolve()));
+      try {
+        // Option B: Enable Turbo Mode
+        db.run('PRAGMA synchronous = OFF;');
+        db.run('PRAGMA journal_mode = MEMORY;');
+        
+        const stream = fs.createReadStream(filePath).pipe(csv());
 
         for await (const packet of stream) {
           const analysis = analyzePacket(packet);
-          await new Promise((resolve, reject) => {
-            stmt.run(
-              packet.timestamp || new Date().toISOString(),
-              packet.sourceIp || "0.0.0.0",
-              packet.destinationIp || "0.0.0.0",
-              packet.userId || "system",
-              packet.resource || "N/A",
-              analysis.category,
-              analysis.riskLevel,
-              analysis.action,
-              analysis.threatScore,
-              JSON.stringify(packet),
-              (err) => err ? reject(err) : resolve()
-            );
-          });
-          count++;
+          buffer.push([
+            packet.timestamp || new Date().toISOString(),
+            packet.sourceIp || "0.0.0.0",
+            packet.destinationIp || "0.0.0.0",
+            packet.userId || "system",
+            packet.resource || "N/A",
+            analysis.category,
+            analysis.riskLevel,
+            analysis.action,
+            analysis.threatScore,
+            JSON.stringify(packet)
+          ]);
 
-          if (count % BATCH_SIZE === 0) {
-            await new Promise((resolve, reject) => db.run("COMMIT", (err) => err ? reject(err) : resolve()));
-            await new Promise((resolve, reject) => db.run("BEGIN TRANSACTION", (err) => err ? reject(err) : resolve()));
-            console.log(`📡 SOC Ingest Progress: ${count} signals indexed...`);
-            // Yield event loop to allow Dashboard/Reports to process
-            await new Promise(resolve => setTimeout(resolve, 100));
+          if (buffer.length >= SUPER_BULK_SIZE) {
+            const placeholders = buffer.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").join(", ");
+            const sql = `INSERT INTO incidents (timestamp, sourceIp, destinationIp, userId, resource, category, riskLevel, action, threatScore, raw_data) VALUES ${placeholders}`;
+            const params = buffer.flat();
+            
+            await new Promise((resolve, reject) => {
+              db.run(sql, params, (err) => err ? reject(err) : resolve());
+            });
+            
+            count += buffer.length;
+            buffer = [];
+            
+            if (count % 10000 === 0) {
+              console.log(`⚡ Quantum Ingest: ${count} signals synchronized...`);
+              await new Promise(resolve => setTimeout(resolve, 20)); // Minimal yield for UI
+            }
           }
         }
 
-        stmt.finalize();
-        await new Promise((resolve, reject) => db.run("COMMIT", (err) => err ? reject(err) : resolve()));
-        console.log(`✅ Background Ingest Complete: ${count} signals total.`);
+        if (buffer.length > 0) {
+          const placeholders = buffer.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").join(", ");
+          const sql = `INSERT INTO incidents (timestamp, sourceIp, destinationIp, userId, resource, category, riskLevel, action, threatScore, raw_data) VALUES ${placeholders}`;
+          const params = buffer.flat();
+          await new Promise((resolve, reject) => db.run(sql, params, (err) => err ? reject(err) : resolve()));
+          count += buffer.length;
+        }
+
+        console.log(`✅ Quantum Ingest Complete: ${count} signals total.`);
       } catch (err) {
-        console.error("❌ Background Ingest Error:", err);
-        db.run("ROLLBACK");
+        console.error("❌ Quantum Ingest Error:", err);
+      } finally {
+        // Reset to Safe Mode
+        db.run('PRAGMA synchronous = NORMAL;');
+        db.run('PRAGMA journal_mode = WAL;');
       }
     });
   });
@@ -227,7 +245,7 @@ app.get("/api/archive", authenticateToken, (req, res) => {
   if (!fs.existsSync(archivePath)) {
     return res.json([]);
   }
-  
+
   const files = fs.readdirSync(archivePath)
     .filter(file => file.endsWith(".csv"))
     .map(file => {
@@ -238,7 +256,7 @@ app.get("/api/archive", authenticateToken, (req, res) => {
         modified: stats.mtime
       };
     });
-  
+
   res.json(files);
 });
 
@@ -250,14 +268,16 @@ app.post("/api/archive/ingest", authenticateToken, (req, res) => {
     return res.status(404).json({ error: "Archive file not found" });
   }
 
-  // Use async for-await for natural backpressure (prevents Memory Crash)
+  // Quantum-Stream Bulk Ingestion for Archives
   (async () => {
     let count = 0;
-    const BATCH_SIZE = 5000;
+    const SUPER_BULK_SIZE = 1000;
+    let buffer = [];
+    
     try {
-      await new Promise((resolve, reject) => db.run("BEGIN TRANSACTION", (err) => err ? reject(err) : resolve()));
-      const stmt = db.prepare(`INSERT INTO incidents (timestamp, sourceIp, destinationIp, userId, resource, category, riskLevel, action, threatScore, raw_data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-      
+      db.run('PRAGMA synchronous = OFF;');
+      db.run('PRAGMA journal_mode = MEMORY;');
+
       const stream = fs.createReadStream(filePath).pipe(csv());
       for await (const row of stream) {
         const packet = {
@@ -269,39 +289,54 @@ app.post("/api/archive/ingest", authenticateToken, (req, res) => {
           category: row.category || row.Label || "Unclassified"
         };
         const analysis = analyzePacket(packet);
-        await new Promise((resolve, reject) => {
-          stmt.run(
-            packet.timestamp, 
-            packet.sourceIp, 
-            packet.destinationIp, 
-            packet.userId,
-            packet.resource,
-            analysis.category, 
-            analysis.riskLevel, 
-            analysis.action, 
-            analysis.threatScore,
-            JSON.stringify(row),
-            (err) => err ? reject(err) : resolve()
-          );
-        });
-        count++;
+        
+        buffer.push([
+          packet.timestamp, 
+          packet.sourceIp, 
+          packet.destinationIp, 
+          packet.userId,
+          packet.resource,
+          analysis.category, 
+          analysis.riskLevel, 
+          analysis.action, 
+          analysis.threatScore,
+          JSON.stringify(row)
+        ]);
 
-        if (count % BATCH_SIZE === 0) {
-          await new Promise((resolve, reject) => db.run("COMMIT", (err) => err ? reject(err) : resolve()));
-          await new Promise((resolve, reject) => db.run("BEGIN TRANSACTION", (err) => err ? reject(err) : resolve()));
-          console.log(`📡 SOC Ingest Progress: ${count} signals indexed...`);
-          // Breathing room for the event loop and other queries
-          await new Promise(resolve => setTimeout(resolve, 100));
+        if (buffer.length >= SUPER_BULK_SIZE) {
+          const placeholders = buffer.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").join(", ");
+          const sql = `INSERT INTO incidents (timestamp, sourceIp, destinationIp, userId, resource, category, riskLevel, action, threatScore, raw_data) VALUES ${placeholders}`;
+          const params = buffer.flat();
+          
+          await new Promise((resolve, reject) => {
+            db.run(sql, params, (err) => err ? reject(err) : resolve());
+          });
+          
+          count += buffer.length;
+          buffer = [];
+          if (count % 10000 === 0) {
+            console.log(`⚡ Quantum Archive Sync: ${count} signals indexed...`);
+            await new Promise(resolve => setTimeout(resolve, 20));
+          }
         }
       }
 
-      stmt.finalize();
-      await new Promise((resolve, reject) => db.run("COMMIT", (err) => err ? reject(err) : resolve()));
-      console.log(`✅ Background Ingest Complete: ${count} signals total.`);
+      if (buffer.length > 0) {
+        const placeholders = buffer.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").join(", ");
+        const sql = `INSERT INTO incidents (timestamp, sourceIp, destinationIp, userId, resource, category, riskLevel, action, threatScore, raw_data) VALUES ${placeholders}`;
+        const params = buffer.flat();
+        await new Promise((resolve, reject) => db.run(sql, params, (err) => err ? reject(err) : resolve()));
+        count += buffer.length;
+      }
+
+      console.log(`✅ Quantum Archive Complete: ${count} signals total.`);
+      res.json({ message: `Archive ${filename} ingested successfully`, count });
     } catch (err) {
-      console.error("❌ Archive Ingest Error:", err);
-      db.run("ROLLBACK");
+      console.error("❌ Quantum Archive Error:", err);
       if (!res.headersSent) res.status(500).json({ error: "Forensic stream failure" });
+    } finally {
+      db.run('PRAGMA synchronous = NORMAL;');
+      db.run('PRAGMA journal_mode = WAL;');
     }
   })();
 });
@@ -313,10 +348,10 @@ app.get("/api/dashboard", authenticateToken, async (req, res) => {
     console.log("--- Executing SQL Aggregations ---");
     const totalLogs = await new Promise((resolve) => db.get("SELECT COUNT(*) as count FROM incidents", (err, row) => resolve(row?.count || 0)));
     console.log(`--- Total Logs: ${totalLogs} ---`);
-    
+
     const suspiciousEvents = await new Promise((resolve) => db.get("SELECT COUNT(*) as count FROM incidents WHERE riskLevel != 'Low'", (err, row) => resolve(row?.count || 0)));
     const activeIncidents = await new Promise((resolve) => db.get("SELECT COUNT(*) as count FROM incidents WHERE riskLevel = 'High'", (err, row) => resolve(row?.count || 0)));
-    
+
     const categoryData = await new Promise((resolve) => {
       db.all("SELECT category as name, COUNT(*) as value FROM incidents GROUP BY category ORDER BY value DESC LIMIT 10", (err, rows) => resolve(rows || []));
     });
@@ -336,9 +371,9 @@ app.get("/api/dashboard", authenticateToken, async (req, res) => {
       activeIncidents,
       riskLevel: suspiciousEvents > (totalLogs * 0.3) ? "High" : "Low",
       lineChartData: timeData,
-      barChartData: categoryData.map(c => ({ 
-        name: c.name.length > 15 ? c.name.substring(0, 12) + '...' : c.name, 
-        value: c.value 
+      barChartData: categoryData.map(c => ({
+        name: c.name.length > 15 ? c.name.substring(0, 12) + '...' : c.name,
+        value: c.value
       })),
       recentAlerts
     });
@@ -375,7 +410,7 @@ app.get("/api/timeline", authenticateToken, (req, res) => {
   });
 });
 
-import { getKnowledgeForIncident, cybersecurityKnowledge } from "./knowledge_base.js";
+import { getKnowledgeForIncident } from "./knowledge_base.js";
 
 app.post("/api/chat", authenticateToken, (req, res) => {
   const { message } = req.body;
@@ -384,32 +419,29 @@ app.post("/api/chat", authenticateToken, (req, res) => {
 
     const total = rows.length;
     const high = rows.filter(r => r.riskLevel === "High").length;
-    const medium = rows.filter(r => r.riskLevel === "Medium").length;
-    const low = rows.filter(r => r.riskLevel === "Low").length;
-
     const categories = {};
     rows.forEach(r => { categories[r.category] = (categories[r.category] || 0) + 1; });
-    const topCategory = Object.entries(categories).sort((a,b) => b[1]-a[1])[0];
+    const topCategory = Object.entries(categories).sort((a, b) => b[1] - a[1])[0];
     const knowledge = topCategory ? getKnowledgeForIncident(topCategory[0], "") : null;
 
     const sourceIps = {};
-    rows.forEach(r => { if(r.sourceIp) sourceIps[r.sourceIp] = (sourceIps[r.sourceIp] || 0) + 1; });
-    const topIp = Object.entries(sourceIps).sort((a,b) => b[1]-a[1])[0];
+    rows.forEach(r => { if (r.sourceIp) sourceIps[r.sourceIp] = (sourceIps[r.sourceIp] || 0) + 1; });
+    const topIp = Object.entries(sourceIps).sort((a, b) => b[1] - a[1])[0];
 
-    const avgThreat = total > 0 ? (rows.reduce((s,r) => s + parseFloat(r.threatScore||0), 0) / total).toFixed(1) : 0;
+    const avgThreat = total > 0 ? (rows.reduce((s, r) => s + parseFloat(r.threatScore || 0), 0) / total).toFixed(1) : 0;
 
     const lowerMsg = message.toLowerCase();
     let response = "";
 
     if (lowerMsg.includes("summar") || lowerMsg.includes("overview") || lowerMsg.includes("status")) {
       response = `📊 INVESTIGATION SUMMARY\n\n` +
-                 `Total Signals: ${total} | High Risk: ${high} | Avg Threat: ${avgThreat}/100\n\n` +
-                 `🔍 PRIMARY PATTERN: ${topCategory ? topCategory[0] : "None"}\n` +
-                 `🛡️ TECHNIQUE: ${knowledge ? knowledge.technique : "Generic Pattern"}\n` +
-                 `📝 DESCRIPTION: ${knowledge ? knowledge.description : "Continuous monitoring recommended."}\n\n` +
-                 `💡 MITIGATION STEPS:\n` +
-                 (knowledge ? knowledge.mitigation.map(m => `• ${m}`).join("\n") : "• Maintain standard SOC posture.\n• Review logs for anomalies.") +
-                 `\n\nRecommendation: ${high > 5 ? "⚠️ Escalate to Tier-2 SOC immediately." : "✅ Risk posture is stable."}`;
+        `Total Signals: ${total} | High Risk: ${high} | Avg Threat: ${avgThreat}/100\n\n` +
+        `🔍 PRIMARY PATTERN: ${topCategory ? topCategory[0] : "None"}\n` +
+        `🛡️ TECHNIQUE: ${knowledge ? knowledge.technique : "Generic Pattern"}\n` +
+        `📝 DESCRIPTION: ${knowledge ? knowledge.description : "Continuous monitoring recommended."}\n\n` +
+        `💡 MITIGATION STEPS:\n` +
+        (knowledge ? knowledge.mitigation.map(m => `• ${m}`).join("\n") : "• Maintain standard SOC posture.\n• Review logs for anomalies.") +
+        `\n\nRecommendation: ${high > 5 ? "⚠️ Escalate to Tier-2 SOC immediately." : "✅ Risk posture is stable."}`;
     } else if (lowerMsg.includes("high") || lowerMsg.includes("critical")) {
       const highEvents = rows.filter(r => r.riskLevel === "High").slice(0, 5);
       response = `🔴 HIGH RISK EVENTS (${high} total)\n\n` + (highEvents.length > 0
@@ -417,9 +449,9 @@ app.post("/api/chat", authenticateToken, (req, res) => {
         : "No high risk events detected.");
     } else if (lowerMsg.includes("recommend") || lowerMsg.includes("action") || lowerMsg.includes("mitigat")) {
       response = `🛡️ SOC MITIGATION PLAYBOOK\n\n` +
-                 `Based on current buffer (${topCategory ? topCategory[0] : "N/A"}): \n\n` +
-                 (knowledge ? knowledge.mitigation.map(m => `✅ ${m}`).join("\n") : "• Review top source IP: " + (topIp ? topIp[0] : "N/A") + "\n• Perform baseline audit.") +
-                 `\n\n• Primary Actor: ${topIp ? topIp[0] : "Internal/Unknown"}\n• Recommended Action: ${high > 5 ? "Activate Incident Response" : "Log & Monitor"}`;
+        `Based on current buffer (${topCategory ? topCategory[0] : "N/A"}): \n\n` +
+        (knowledge ? knowledge.mitigation.map(m => `✅ ${m}`).join("\n") : "• Review top source IP: " + (topIp ? topIp[0] : "N/A") + "\n• Perform baseline audit.") +
+        `\n\n• Primary Actor: ${topIp ? topIp[0] : "Internal/Unknown"}\n• Recommended Action: ${high > 5 ? "Activate Incident Response" : "Log & Monitor"}`;
     } else {
       response = `🤖 ForensiAI Neural Analyst\n\nBuffer Status: ${total} signals indexed | ${high} high-risk\n\nTry asking: "Summarize the findings", "What are the mitigation steps?", or "Show high risk events".`;
     }
@@ -435,7 +467,7 @@ app.get("/api/report", authenticateToken, async (req, res) => {
     const high = await new Promise((resolve) => db.get("SELECT COUNT(*) as count FROM incidents WHERE riskLevel = 'High'", (err, row) => resolve(Number(row?.count || 0))));
     const medium = await new Promise((resolve) => db.get("SELECT COUNT(*) as count FROM incidents WHERE riskLevel = 'Medium'", (err, row) => resolve(Number(row?.count || 0))));
     const low = await new Promise((resolve) => db.get("SELECT COUNT(*) as count FROM incidents WHERE riskLevel = 'Low'", (err, row) => resolve(Number(row?.count || 0))));
-    
+
     console.log(`📊 Report Stats: Total=${total}, High=${high}`);
 
     const categoryBreakdown = await new Promise((resolve) => {

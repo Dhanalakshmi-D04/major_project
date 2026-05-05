@@ -11,22 +11,30 @@ function generateProfessionalPdf(report) {
     const pageWidth = doc.internal.pageSize.getWidth();
     const pageHeight = doc.internal.pageSize.getHeight();
 
-    const drawHeaderFooter = (data) => {
+    const drawBackground = () => {
       doc.setFillColor(10, 12, 15);
       doc.rect(0, 0, pageWidth, pageHeight, "F");
+    };
+
+    const drawHeaderFooter = (data) => {
+      // Header Bar
       doc.setFillColor(0, 212, 255);
       doc.rect(0, 0, pageWidth, 40, "F");
+      
       doc.setTextColor(0, 0, 0);
       doc.setFont("helvetica", "bold");
       doc.setFontSize(10);
       doc.text("FORENSIAI // SOC INVESTIGATION REPORT", margin, 25);
+      
+      // Footer
       doc.setTextColor(80, 80, 80);
       doc.setFontSize(7);
-      doc.text("CLASSIFIED SECURITY DATA", pageWidth / 2, pageHeight - 15, { align: "center" });
+      doc.text(`CLASSIFIED SECURITY DATA | Page ${data.pageNumber}`, pageWidth / 2, pageHeight - 15, { align: "center" });
     };
 
-    doc.setFillColor(10, 12, 15);
-    doc.rect(0, 0, pageWidth, pageHeight, "F");
+    // Initial Background
+    drawBackground();
+    
     let y = 70;
 
     doc.setTextColor(0, 212, 255);
@@ -46,22 +54,27 @@ function generateProfessionalPdf(report) {
       startY: y,
       head: [["Metric", "Value", "Notes"]],
       body: [
-        ["Total Signals", report.incidents, "Volume of ingested telemetry"],
-        ["High Risk Events", report.high, "Critical anomalies detected"],
-        ["Medium Risk Events", report.medium, "Potential reconnaissance signals"],
-        ["Low Risk Events", report.low, "Standard operational traffic"],
+        ["Total Signals", report.incidents.toLocaleString(), "Volume of ingested telemetry"],
+        ["High Risk Events", report.high.toLocaleString(), "Critical anomalies detected"],
+        ["Medium Risk Events", report.medium.toLocaleString(), "Potential reconnaissance signals"],
+        ["Low Risk Events", report.low.toLocaleString(), "Standard operational traffic"],
       ],
       theme: 'grid',
       styles: { fillColor: [15, 19, 24], textColor: [200, 200, 200], fontSize: 8, lineColor: [30, 37, 48] },
       headStyles: { fillColor: [0, 212, 255], textColor: [0, 0, 0], fontStyle: "bold" },
-      didDrawPage: drawHeaderFooter
+      didDrawPage: (data) => {
+        // Draw background for every new page
+        if (data.pageNumber > 1) drawBackground();
+        drawHeaderFooter(data);
+      }
     });
     y = doc.lastAutoTable.finalY + 30;
 
     if (report.recentHighRisk?.length > 0) {
+      if (y > pageHeight - 100) { doc.addPage(); y = 70; }
       doc.setTextColor(239, 68, 68);
       doc.setFontSize(11);
-      doc.text("02. CRITICAL INCIDENT LOG", margin, y); y += 15;
+      doc.text("02. CRITICAL INCIDENT LOG (TOP 5)", margin, y); y += 15;
       autoTable(doc, {
         startY: y,
         head: [["User", "Resource", "Source IP", "Action", "Score"]],
@@ -75,7 +88,11 @@ function generateProfessionalPdf(report) {
         theme: 'grid',
         styles: { fillColor: [15, 19, 24], textColor: [200, 200, 200], fontSize: 7, lineColor: [30, 37, 48] },
         headStyles: { fillColor: [180, 30, 30], textColor: [255, 255, 255] },
-        didDrawPage: drawHeaderFooter
+        didDrawPage: (data) => {
+          // Headers are already handled by the first autoTable's didDrawPage if it spans multiple pages, 
+          // but we need them for this one too if it starts on a new page.
+          drawHeaderFooter(data);
+        }
       });
     }
 
