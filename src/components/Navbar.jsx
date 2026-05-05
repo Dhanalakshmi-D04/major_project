@@ -27,7 +27,7 @@ export default function Navbar({ onOpenMobileSidebar, sidebarWidth }) {
   const fetchNotifications = async () => {
     try {
       const data = await getNotifications();
-      setNotifications(data);
+      setNotifications(data || []);
     } catch (err) {
       console.error("Failed to fetch notifications", err);
     }
@@ -60,118 +60,115 @@ export default function Navbar({ onOpenMobileSidebar, sidebarWidth }) {
 
   return (
     <header 
-      className="fixed top-0 right-0 z-40 soc-header transition-all duration-500"
+      className="fixed top-0 right-0 z-40 bg-background border-b border-divider transition-all duration-300"
       style={{ left: sidebarWidth || 0 }}
     >
-      <div className="h-20 px-8 flex items-center justify-between">
-        <div className="flex items-center gap-8">
-          <button onClick={onOpenMobileSidebar} className="lg:hidden p-2 text-primary hover:text-white transition-colors">
-            <FiMenu size={24} />
+      <div className="h-[52px] px-6 flex items-center justify-between">
+        <div className="flex items-center gap-6">
+          <button onClick={onOpenMobileSidebar} className="lg:hidden p-2 text-primary hover:text-text-primary transition-colors">
+            <FiMenu size={20} />
           </button>
           
-          <div className="hidden lg:flex items-center gap-6">
-             <div className="flex items-center gap-2 text-[0.6rem] font-bold text-primary uppercase tracking-[0.2em]">
-               <span className="h-1.5 w-1.5 rounded-full bg-primary shadow-[0_0_8px_var(--primary-glow)]" />
-               SYSTEM_SYNC_ACTIVE
+          <div className="hidden lg:flex items-center">
+             <div className="flex items-center gap-2 text-[0.65rem] font-mono font-bold text-success uppercase tracking-[0.12em]">
+               <span className="h-2 w-2 rounded-full bg-success" />
+               NODE_ACTIVE
              </div>
           </div>
         </div>
 
         {/* Global Search */}
-        <form onSubmit={onSubmit} className="hidden md:flex flex-1 max-w-xl mx-8">
+        <form onSubmit={onSubmit} className="hidden md:flex flex-1 max-w-lg mx-6">
           <div className="w-full relative group">
-            <FiSearch className="absolute left-4 top-1/2 -translate-y-1/2 text-primary/40 group-focus-within:text-primary transition-colors" />
+            <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted group-focus-within:text-primary transition-colors" size={14} />
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search threat events, IPs, or analyst notes..."
-              className="w-full input-soc pl-12 bg-white/[0.02]"
+              placeholder="Search forensic buffer..."
+              className="w-full bg-surface border border-divider rounded-sm pl-10 pr-4 py-1.5 text-xs text-text-primary placeholder:text-text-muted outline-none focus:border-primary/40 transition-all"
             />
           </div>
         </form>
 
         {/* Action Controls */}
-        <div className="flex items-center gap-6">
+        <div className="flex items-center gap-4">
           <div className="relative" ref={notifRef}>
             <button
               onClick={() => {
                 setNotifOpen(!notifOpen);
                 setProfileOpen(false);
               }}
-              className={[
-                "p-2.5 rounded-xl border border-white/5 bg-white/5 hover:bg-white/10 transition-all",
-                hasHighRisk ? "ring-2 ring-danger/30" : ""
-              ].join(" ")}
+              className="p-2 text-text-secondary hover:text-text-primary transition-all relative"
             >
-              <FiBell className={hasHighRisk ? "text-danger" : "text-primary/60"} />
+              <FiBell size={18} className={hasHighRisk ? "text-danger" : ""} />
               {notifications.length > 0 && (
-                <span className="absolute top-2.5 right-2.5 h-2 w-2 bg-primary rounded-full ring-2 ring-black" />
+                <span className="absolute top-1.5 right-1.5 h-1.5 w-1.5 bg-primary rounded-full ring-1 ring-background" />
               )}
             </button>
 
             {notifOpen && (
-              <div className="absolute top-full right-0 mt-3 w-80 soc-card p-2 overflow-hidden animate-fade-in-up">
-                <div className="px-4 py-3 border-b border-white/5 flex justify-between items-center bg-white/[0.02]">
-                  <span className="text-[0.65rem] font-bold text-primary uppercase tracking-widest">Security Feed</span>
+              <div className="absolute top-full right-0 mt-2 w-72 soc-card p-0 overflow-hidden shadow-tactical bg-elevated">
+                <div className="px-4 py-2 border-b border-divider bg-surface">
+                  <span className="label-mono text-primary">System Feed</span>
                 </div>
-                <div className="max-h-96 overflow-y-auto">
+                <div className="max-h-80 overflow-y-auto">
                   {notifications.length > 0 ? (
                     notifications.map(n => (
-                      <div key={n.id} className="p-4 hover:bg-white/[0.03] transition-colors border-b border-white/5 last:border-0 cursor-pointer">
+                      <div key={n.id} className="p-3 hover:bg-surface transition-colors border-b border-divider last:border-0 cursor-pointer">
                         <div className="flex items-start gap-3">
-                          <div className={`mt-1 h-2 w-2 rounded-full shrink-0 ${n.riskLevel === 'High' ? 'bg-danger' : 'bg-primary'}`} />
+                          <div className={`mt-1.5 h-1.5 w-1.5 rounded-full shrink-0 ${n.riskLevel === 'High' ? 'bg-danger' : 'bg-success'}`} />
                           <div>
-                            <div className="text-[0.8rem] font-semibold text-white line-clamp-2">{n.title}</div>
-                            <div className="text-[0.7rem] text-primary/60 mt-1 uppercase font-mono">{n.timestamp}</div>
+                            <div className="text-[0.7rem] font-medium text-text-primary line-clamp-2">{n.title}</div>
+                            <div className="text-[0.6rem] font-mono text-text-muted mt-1 uppercase tracking-tighter">{n.timestamp}</div>
                           </div>
                         </div>
                       </div>
                     ))
                   ) : (
-                    <div className="p-8 text-center text-[0.7rem] text-slate-500 uppercase tracking-widest">No active alerts</div>
+                    <div className="p-6 text-center text-[0.65rem] text-text-muted uppercase tracking-widest font-mono">Buffer clear</div>
                   )}
                 </div>
               </div>
             )}
           </div>
 
-          <div className="flex items-center gap-4 pl-6 border-l border-white/5 relative" ref={profileRef}>
+          <div className="flex items-center gap-3 pl-4 border-l border-divider relative" ref={profileRef}>
             <div className="hidden sm:block text-right cursor-pointer" onClick={() => setProfileOpen(!profileOpen)}>
-              <div className="text-sm font-bold text-white">{user?.username}</div>
-              <div className="text-[0.6rem] font-bold text-primary uppercase tracking-tighter flex items-center justify-end gap-1">
-                {user?.role} <FiChevronDown />
+              <div className="text-xs font-bold text-text-primary">{user?.username}</div>
+              <div className="text-[0.6rem] font-mono font-bold text-text-secondary uppercase tracking-tighter flex items-center justify-end gap-1">
+                {user?.role} <FiChevronDown size={12} />
               </div>
             </div>
             
             <div 
-              className="h-10 w-10 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center text-primary font-bold shadow-sm cursor-pointer hover:bg-primary hover:text-black transition-all"
+              className="h-8 w-8 bg-elevated border border-divider flex items-center justify-center text-primary font-mono text-xs font-bold rounded-sm cursor-pointer hover:border-primary transition-all"
               onClick={() => setProfileOpen(!profileOpen)}
             >
               {user?.username?.[0]?.toUpperCase()}
             </div>
 
             {profileOpen && (
-              <div className="absolute top-full right-0 mt-3 animate-fade-in-up">
-                <div className="bg-[#121212] border border-white/10 rounded-xl shadow-2xl overflow-hidden min-w-[220px]">
-                  <div className="px-6 py-4 border-b border-white/5 bg-white/[0.02]">
-                    <div className="text-xs font-bold text-white">{user?.username}</div>
-                    <div className="text-[0.6rem] text-primary mt-1 uppercase tracking-widest">Analyst // Sector 7G</div>
+              <div className="absolute top-full right-0 mt-2">
+                <div className="bg-elevated border border-divider rounded-sm shadow-tactical overflow-hidden min-w-[180px]">
+                  <div className="px-4 py-3 border-b border-divider bg-surface">
+                    <div className="text-xs font-bold text-text-primary">{user?.username}</div>
+                    <div className="text-[0.6rem] font-mono text-text-muted mt-0.5 uppercase tracking-widest">Active session</div>
                   </div>
                   <Link 
                     to="/profile" 
                     onClick={() => setProfileOpen(false)}
-                    className="flex items-center gap-3 px-6 py-4 text-sm font-bold text-white hover:bg-primary/10 hover:text-primary transition-all border-b border-white/5"
+                    className="flex items-center gap-3 px-4 py-3 text-[0.7rem] font-mono uppercase font-bold text-text-primary hover:bg-surface transition-all border-b border-divider"
                   >
-                    <FiUser /> User Profile
+                    <FiUser size={14} /> Profile
                   </Link>
                   <button 
                     onClick={() => {
                       setProfileOpen(false);
                       logout();
                     }}
-                    className="w-full flex items-center gap-3 px-6 py-4 text-sm font-bold text-danger hover:bg-danger/10 transition-all"
+                    className="w-full flex items-center gap-3 px-4 py-3 text-[0.7rem] font-mono uppercase font-bold text-danger hover:bg-danger/5 transition-all"
                   >
-                    <FiLogOut /> Sign Out
+                    <FiLogOut size={14} /> Log_Out
                   </button>
                 </div>
               </div>

@@ -37,10 +37,13 @@ db.serialize(() => {
     timestamp TEXT,
     sourceIp TEXT,
     destinationIp TEXT,
+    userId TEXT,
+    resource TEXT,
     category TEXT,
     riskLevel TEXT,
     action TEXT,
-    threatScore REAL
+    threatScore REAL,
+    raw_data TEXT
   )`);
 });
 
@@ -51,7 +54,10 @@ const authenticateToken = (req, res, next) => {
   if (!token) return res.sendStatus(401);
 
   jwt.verify(token, SECRET_KEY, (err, user) => {
-    if (err) return res.sendStatus(403);
+    if (err) {
+      console.error("❌ JWT Verification Error:", err.message);
+      return res.sendStatus(403);
+    }
     req.user = user;
     next();
   });
@@ -73,7 +79,7 @@ app.post("/api/login", (req, res) => {
     if (err || !user) return res.status(400).json({ error: "Analyst not found" });
     const valid = await bcrypt.compare(password, user.password);
     if (!valid) return res.status(400).json({ error: "Invalid credentials" });
-    const token = jwt.sign({ id: user.id, username: user.username, role: user.role }, SECRET_KEY, { expiresIn: "8h" });
+    const token = jwt.sign({ id: user.id, username: user.username, role: user.role }, SECRET_KEY, { expiresIn: "24h" });
     res.json({ token, user: { username: user.username, role: user.role } });
   });
 });
@@ -84,7 +90,7 @@ app.post("/api/ingest", authenticateToken, (req, res) => {
   const { data } = req.body;
   if (!Array.isArray(data)) return res.status(400).json({ error: "Invalid signal format" });
 
-  const stmt = db.prepare(`INSERT INTO incidents (timestamp, sourceIp, destinationIp, category, riskLevel, action, threatScore) VALUES (?, ?, ?, ?, ?, ?, ?)`);
+  const stmt = db.prepare(`INSERT INTO incidents (timestamp, sourceIp, destinationIp, userId, resource, category, riskLevel, action, threatScore, raw_data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
   
   data.forEach((packet) => {
     const analysis = analyzePacket(packet);
@@ -92,10 +98,13 @@ app.post("/api/ingest", authenticateToken, (req, res) => {
       packet.timestamp || new Date().toISOString(),
       packet.sourceIp || "0.0.0.0",
       packet.destinationIp || "0.0.0.0",
+      packet.userId || "system",
+      packet.resource || "N/A",
       analysis.category,
       analysis.riskLevel,
       analysis.action,
-      analysis.threatScore
+      analysis.threatScore,
+      packet.raw_data || JSON.stringify(packet)
     );
   });
 
