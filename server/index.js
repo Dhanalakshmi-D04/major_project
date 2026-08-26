@@ -16,9 +16,7 @@ const SECRET_KEY = "cyber_stealth_secret_2024";
 // Configure Multer for large uploads
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const dir = "./archive";
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir);
-    cb(null, dir);
+    cb(null, archiveDir);
   },
   filename: (req, file, cb) => {
     cb(null, `upload_${Date.now()}_${file.originalname}`);
@@ -42,8 +40,16 @@ import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// --- DATABASE INITIALIZATION ---
-const dbPath = path.join(__dirname, "forensiai.db");
+// --- DATABASE INITIALIZATION (Render-Ready) ---
+const PERSISTENT_PATH = process.env.RENDER_DISK_PATH || __dirname;
+const dbPath = path.join(PERSISTENT_PATH, "forensiai.db");
+const archiveDir = path.join(PERSISTENT_PATH, "archive");
+
+if (!fs.existsSync(archiveDir)) {
+  fs.mkdirSync(archiveDir, { recursive: true });
+  console.log(`📁 Archive Directory Created: ${archiveDir}`);
+}
+
 const db = new sqlite3.Database(dbPath);
 
 // Enable high-concurrency WAL mode and set a busy timeout
@@ -176,14 +182,14 @@ app.post("/api/upload", authenticateToken, (req, res) => {
     // Quantum-Stream Bulk Ingestion Task (Extreme Hybrid)
     setImmediate(async () => {
       let count = 0;
-      const SUPER_BULK_SIZE = 1000; 
+      const SUPER_BULK_SIZE = 1000;
       let buffer = [];
 
       try {
         // Option B: Enable Turbo Mode
         db.run('PRAGMA synchronous = OFF;');
         db.run('PRAGMA journal_mode = MEMORY;');
-        
+
         const stream = fs.createReadStream(filePath).pipe(csv());
 
         for await (const packet of stream) {
@@ -205,14 +211,14 @@ app.post("/api/upload", authenticateToken, (req, res) => {
             const placeholders = buffer.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").join(", ");
             const sql = `INSERT INTO incidents (timestamp, sourceIp, destinationIp, userId, resource, category, riskLevel, action, threatScore, raw_data) VALUES ${placeholders}`;
             const params = buffer.flat();
-            
+
             await new Promise((resolve, reject) => {
               db.run(sql, params, (err) => err ? reject(err) : resolve());
             });
-            
+
             count += buffer.length;
             buffer = [];
-            
+
             if (count % 10000 === 0) {
               console.log(`⚡ Quantum Ingest: ${count} signals synchronized...`);
               await new Promise(resolve => setTimeout(resolve, 20)); // Minimal yield for UI
@@ -273,7 +279,7 @@ app.post("/api/archive/ingest", authenticateToken, (req, res) => {
     let count = 0;
     const SUPER_BULK_SIZE = 1000;
     let buffer = [];
-    
+
     try {
       db.run('PRAGMA synchronous = OFF;');
       db.run('PRAGMA journal_mode = MEMORY;');
@@ -289,16 +295,16 @@ app.post("/api/archive/ingest", authenticateToken, (req, res) => {
           category: row.category || row.Label || "Unclassified"
         };
         const analysis = analyzePacket(packet);
-        
+
         buffer.push([
-          packet.timestamp, 
-          packet.sourceIp, 
-          packet.destinationIp, 
+          packet.timestamp,
+          packet.sourceIp,
+          packet.destinationIp,
           packet.userId,
           packet.resource,
-          analysis.category, 
-          analysis.riskLevel, 
-          analysis.action, 
+          analysis.category,
+          analysis.riskLevel,
+          analysis.action,
           analysis.threatScore,
           JSON.stringify(row)
         ]);
@@ -307,11 +313,11 @@ app.post("/api/archive/ingest", authenticateToken, (req, res) => {
           const placeholders = buffer.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").join(", ");
           const sql = `INSERT INTO incidents (timestamp, sourceIp, destinationIp, userId, resource, category, riskLevel, action, threatScore, raw_data) VALUES ${placeholders}`;
           const params = buffer.flat();
-          
+
           await new Promise((resolve, reject) => {
             db.run(sql, params, (err) => err ? reject(err) : resolve());
           });
-          
+
           count += buffer.length;
           buffer = [];
           if (count % 10000 === 0) {
