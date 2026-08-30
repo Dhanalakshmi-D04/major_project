@@ -82,6 +82,8 @@ db.serialize(() => {
   db.run(`CREATE INDEX IF NOT EXISTS idx_timestamp ON incidents(timestamp)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_risk ON incidents(riskLevel)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_category ON incidents(category)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_source_ip ON incidents(sourceIp)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_risk_id ON incidents(riskLevel, id DESC)`);
 });
 
 // Set longer busy timeout to handle background ingestion locks more gracefully
@@ -352,11 +354,19 @@ app.get("/api/dashboard", authenticateToken, async (req, res) => {
   try {
     // Perform high-speed SQL aggregations
     console.log("--- Executing SQL Aggregations ---");
-    const totalLogs = await new Promise((resolve) => db.get("SELECT COUNT(*) as count FROM incidents", (err, row) => resolve(row?.count || 0)));
+    // Keep the dashboard to one scan for its headline metrics.  The previous
+    // version scanned the complete forensic buffer once for every counter.
+    const metrics = await new Promise((resolve, reject) => {
+      db.get(`SELECT
+        COUNT(*) AS totalLogs,
+        SUM(CASE WHEN riskLevel != 'Low' THEN 1 ELSE 0 END) AS suspiciousEvents,
+        SUM(CASE WHEN riskLevel = 'High' THEN 1 ELSE 0 END) AS activeIncidents
+        FROM incidents`, (err, row) => err ? reject(err) : resolve(row));
+    });
+    const totalLogs = Number(metrics?.totalLogs || 0);
     console.log(`--- Total Logs: ${totalLogs} ---`);
-
-    const suspiciousEvents = await new Promise((resolve) => db.get("SELECT COUNT(*) as count FROM incidents WHERE riskLevel != 'Low'", (err, row) => resolve(row?.count || 0)));
-    const activeIncidents = await new Promise((resolve) => db.get("SELECT COUNT(*) as count FROM incidents WHERE riskLevel = 'High'", (err, row) => resolve(row?.count || 0)));
+    const suspiciousEvents = Number(metrics?.suspiciousEvents || 0);
+    const activeIncidents = Number(metrics?.activeIncidents || 0);
 
     const categoryData = await new Promise((resolve) => {
       db.all("SELECT category as name, COUNT(*) as value FROM incidents GROUP BY category ORDER BY value DESC LIMIT 10", (err, rows) => resolve(rows || []));
@@ -469,10 +479,20 @@ app.post("/api/chat", authenticateToken, (req, res) => {
 app.get("/api/report", authenticateToken, async (req, res) => {
   console.log("📄 Generating Forensic Integrity Report...");
   try {
-    const total = await new Promise((resolve) => db.get("SELECT COUNT(*) as count FROM incidents", (err, row) => resolve(Number(row?.count || 0))));
-    const high = await new Promise((resolve) => db.get("SELECT COUNT(*) as count FROM incidents WHERE riskLevel = 'High'", (err, row) => resolve(Number(row?.count || 0))));
-    const medium = await new Promise((resolve) => db.get("SELECT COUNT(*) as count FROM incidents WHERE riskLevel = 'Medium'", (err, row) => resolve(Number(row?.count || 0))));
-    const low = await new Promise((resolve) => db.get("SELECT COUNT(*) as count FROM incidents WHERE riskLevel = 'Low'", (err, row) => resolve(Number(row?.count || 0))));
+    // Calculate every headline figure in one pass through the incident table.
+    const metrics = await new Promise((resolve, reject) => {
+      db.get(`SELECT
+        COUNT(*) AS total,
+        SUM(CASE WHEN riskLevel = 'High' THEN 1 ELSE 0 END) AS high,
+        SUM(CASE WHEN riskLevel = 'Medium' THEN 1 ELSE 0 END) AS medium,
+        SUM(CASE WHEN riskLevel = 'Low' THEN 1 ELSE 0 END) AS low,
+        AVG(threatScore) AS avgScore
+        FROM incidents`, (err, row) => err ? reject(err) : resolve(row));
+    });
+    const total = Number(metrics?.total || 0);
+    const high = Number(metrics?.high || 0);
+    const medium = Number(metrics?.medium || 0);
+    const low = Number(metrics?.low || 0);
 
     console.log(`📊 Report Stats: Total=${total}, High=${high}`);
 
@@ -484,8 +504,7 @@ app.get("/api/report", authenticateToken, async (req, res) => {
       db.all("SELECT sourceIp as ip, COUNT(*) as count FROM incidents WHERE sourceIp IS NOT NULL GROUP BY sourceIp ORDER BY count DESC LIMIT 10", (err, rows) => resolve(rows || []));
     });
 
-    const avgScoreResult = await new Promise((resolve) => db.get("SELECT AVG(threatScore) as avg FROM incidents", (err, row) => resolve(row?.avg)));
-    const avgScore = avgScoreResult ? Number(avgScoreResult).toFixed(1) : "0.0";
+    const avgScore = metrics?.avgScore ? Number(metrics.avgScore).toFixed(1) : "0.0";
 
     const recentHighRisk = await new Promise((resolve) => {
       db.all("SELECT sourceIp, destinationIp, category, action, threatScore, timestamp FROM incidents WHERE riskLevel = 'High' ORDER BY id DESC LIMIT 5", (err, rows) => resolve(rows || []));
